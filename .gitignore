@@ -1,0 +1,43 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# Environment variables
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files - EXCLUDE ALL JSON AND INDEX FILES
+data/raw/
+data/processed/
+data/vector_store/
+
+# Keep directory structure only
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/vector_store/.gitkeep
+
+# Logs
+*.log
+
+# Large files
+*.pkl
+*.h5
+*.zip
+*.json
