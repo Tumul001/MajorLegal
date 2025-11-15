@@ -34,6 +34,7 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 
 from rag_system.legal_rag import ProductionLegalRAGSystem
+from citation_verifier import CitationVerifier, CitationVerification
 
 # =======================
 # Custom CSS
@@ -265,13 +266,48 @@ def display_argument(argument: LegalArgument, role: str, round_num: int):
         for i, point in enumerate(argument.supporting_points, 1):
             st.write(f"{i}. {point}")
     
-    with st.expander("📚 Case Citations"):
-        for citation in argument.case_citations:
-            st.markdown(f"**{citation.case_name}** ({citation.year})")
-            st.write(f"*Citation:* {citation.citation}")
-            st.write(f"*Relevance:* {citation.relevance}")
-            st.write(f"*Excerpt:* {citation.excerpt}")
-            st.divider()
+    with st.expander("📚 Case Citations (Verified)"):
+        if not argument.case_citations:
+            st.info("No citations provided")
+        else:
+            # Initialize verifier if not already done
+            if 'citation_verifier' not in st.session_state:
+                try:
+                    rag_system = ProductionLegalRAGSystem()
+                    st.session_state.citation_verifier = CitationVerifier(rag_system.vector_store)
+                except Exception as e:
+                    st.warning(f"Citation verification unavailable: {str(e)}")
+                    st.session_state.citation_verifier = None
+            
+            verifier = st.session_state.citation_verifier
+            
+            for citation in argument.case_citations:
+                # Verify citation if verifier available
+                if verifier:
+                    verification = verifier.verify_case_exists(
+                        case_name=citation.case_name,
+                        citation=citation.citation,
+                        year=citation.year
+                    )
+                    
+                    # Display with verification status
+                    if verification.flag == "VERIFIED":
+                        st.markdown(f"✅ **{citation.case_name}** ({citation.year})")
+                        st.caption(f"🔍 Verified ({verification.confidence:.0%} confidence)")
+                    elif verification.flag == "UNCERTAIN":
+                        st.markdown(f"⚠️ **{citation.case_name}** ({citation.year})")
+                        st.warning(f"🔍 Uncertain verification ({verification.confidence:.0%} confidence) - Review recommended")
+                    else:
+                        st.markdown(f"❌ **{citation.case_name}** ({citation.year})")
+                        st.error(f"🚨 UNVERIFIED - Cannot confirm this case exists in database")
+                else:
+                    # Fallback display without verification
+                    st.markdown(f"**{citation.case_name}** ({citation.year})")
+                
+                st.write(f"*Citation:* {citation.citation}")
+                st.write(f"*Relevance:* {citation.relevance}")
+                st.write(f"*Excerpt:* {citation.excerpt}")
+                st.divider()
     
     with st.expander("📖 Statutes Cited"):
         for statute in argument.statutes_cited:
@@ -1423,8 +1459,51 @@ Legal Question: Should the evidence (stolen jewelry) be admissible in court?"""
                     if citation.case_name not in [c.case_name for c in all_citations]:
                         all_citations.append(citation)
             
-            for citation in all_citations:
-                st.write(f"• **{citation.case_name}** ({citation.year}) - {citation.citation}")
+            # Verify all citations and display summary
+            if all_citations and 'citation_verifier' in st.session_state and st.session_state.citation_verifier:
+                verifier = st.session_state.citation_verifier
+                
+                # Convert to dict format for verification
+                citations_to_verify = [
+                    {
+                        'case_name': c.case_name,
+                        'citation': c.citation,
+                        'year': c.year
+                    }
+                    for c in all_citations
+                ]
+                
+                # Verify all
+                verification_results = verifier.verify_all_citations(citations_to_verify)
+                summary = verifier.get_verification_summary(verification_results)
+                
+                # Display verification summary
+                st.info(f"""
+                **🔍 Citation Verification Summary**
+                
+                - **Total Citations:** {summary['total']}
+                - ✅ **Verified:** {summary['verified']} ({summary['verification_rate']:.1f}%)
+                - ⚠️ **Uncertain:** {summary['uncertain']}
+                - ❌ **Unverified:** {summary['unverified']}
+                - 🚨 **Hallucinated:** {summary['hallucinated']}
+                - **Avg Confidence:** {summary['avg_confidence']:.0%}
+                - **Status:** {'🟢 SAFE' if summary['status'] == 'SAFE' else '🔴 RISKY'}
+                """)
+                
+                # Display each citation with verification
+                for citation, verification in verification_results:
+                    if verification.flag == "VERIFIED":
+                        st.success(f"✅ **{citation['case_name']}** ({citation['year']}) - {citation['citation']} | Confidence: {verification.confidence:.0%}")
+                    elif verification.flag == "UNCERTAIN":
+                        st.warning(f"⚠️ **{citation['case_name']}** ({citation['year']}) - {citation['citation']} | Confidence: {verification.confidence:.0%}")
+                    elif verification.flag == "HALLUCINATED":
+                        st.error(f"🚨 **{citation['case_name']}** - HALLUCINATED (placeholder or empty)")
+                    else:
+                        st.error(f"❌ **{citation['case_name']}** ({citation['year']}) - {citation['citation']} | UNVERIFIED")
+            else:
+                # Fallback without verification
+                for citation in all_citations:
+                    st.write(f"• **{citation.case_name}** ({citation.year}) - {citation.citation}")
         
         except Exception as e:
             st.error(f"❌ An error occurred during the debate: {str(e)}")
