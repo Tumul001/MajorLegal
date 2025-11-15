@@ -1,0 +1,45 @@
+{
+  "total_queries": 15,
+  "successful_retrievals": 15,
+  "metrics": {
+    "avg_relevance_all_docs": {
+      "mean": 0.7007900138696035,
+      "std": 0.04201224475832023,
+      "min": 0.6042365252971649,
+      "max": 0.7786437153816224
+    },
+    "top_doc_relevance": {
+      "mean": 0.9516119400660197,
+      "std": 0.06432455555441702,
+      "min": 0.8061537742614746,
+      "max": 1.0000001192092896
+    }
+  },
+  "relevance_distribution": {
+    "highly_relevant_pct": 100.0,
+    "relevant_pct": 0.0,
+    "not_relevant_pct": 0.0
+  },
+  "query_types": {
+    "constitutional": {
+      "count": 3,
+      "avg_relevance": 0.7228133956591289
+    },
+    "criminal": {
+      "count": 3,
+      "avg_relevance": 0.7126580158869427
+    },
+    "civil": {
+      "count": 3,
+      "avg_relevance": 0.6911062359809875
+    },
+    "service": {
+      "count": 3,
+      "avg_relevance": 0.7077653169631958
+    },
+    "property": {
+      "count": 3,
+      "avg_relevance": 0.6696071048577626
+    }
+  }
+}
