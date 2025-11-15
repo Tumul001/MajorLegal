@@ -40,4 +40,8 @@ data/vector_store/
 *.pkl
 *.h5
 *.zip
-*.json
+
+# Test outputs and generated files
+*_report.json
+test_suite_*.json
+automated_evaluation_report.json
