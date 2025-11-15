@@ -31,12 +31,6 @@ try:
 except ImportError:
     HuggingFaceEmbeddings = None
 
-# Import mock embeddings for development
-try:
-    from .simple_mock_embeddings import SimpleMockEmbeddings
-except ImportError:
-    SimpleMockEmbeddings = None
-
 # Import Document from the correct module for newer LangChain versions
 try:
     from langchain_core.documents import Document
@@ -58,69 +52,57 @@ class IndianLegalVectorStore:
     Vector store for Indian legal documents using FAISS
     """
     
-    def __init__(self, embedding_model="text-embedding-3-small", use_mock=False):
+    def __init__(self, embedding_model="text-embedding-3-small"):
         """
         Initialize vector store
         
         Args:
             embedding_model: Embedding model name (OpenAI or Google)
-            use_mock: If True, use mock embeddings for development (no API calls)
         """
-        # Check if mock mode is enabled via environment variable
-        if os.getenv("USE_MOCK_EMBEDDINGS", "").lower() in ("true", "1", "yes"):
-            use_mock = True
+        # Priority: HuggingFace (free, local) > Google > OpenAI
+        use_huggingface = os.getenv("USE_HUGGINGFACE_EMBEDDINGS", "").lower() in ("true", "1", "yes")
+        google_api_key = os.getenv("GOOGLE_API_KEY")
+        openai_api_key = os.getenv("OPENAI_API_KEY")
         
-        if use_mock:
-            print("ℹ️  Using SIMPLE MOCK embeddings (hash-based, no sklearn)")
-            if SimpleMockEmbeddings is None:
-                raise ImportError("SimpleMockEmbeddings not available")
-            self.embeddings = SimpleMockEmbeddings(dimension=384)
+        if use_huggingface or (not google_api_key and not openai_api_key):
+            print("ℹ️  Using HuggingFace embeddings (local, no API calls)")
+            if HuggingFaceEmbeddings is None:
+                raise ImportError(
+                    "HuggingFaceEmbeddings not available.\n"
+                    "Install: pip install langchain-huggingface sentence-transformers"
+                )
+            # Using a good multilingual model suitable for legal text
+            # This will download ~420MB model on first run
+            self.embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2",
+                model_kwargs={'device': 'cpu'},
+                encode_kwargs={'normalize_embeddings': True}
+            )
+        elif google_api_key:
+            print("ℹ️  Using Google Gemini embeddings")
+            if GoogleGenerativeAIEmbeddings is None:
+                raise ImportError(
+                    "GoogleGenerativeAIEmbeddings not available.\n"
+                    "Install: pip install langchain-google-genai"
+                )
+            self.embeddings = GoogleGenerativeAIEmbeddings(
+                model="models/embedding-001",
+                google_api_key=google_api_key
+            )
+        elif openai_api_key:
+            print("ℹ️  Using OpenAI embeddings")
+            self.embeddings = OpenAIEmbeddings(
+                model=embedding_model,
+                openai_api_key=openai_api_key
+            )
         else:
-            # Priority: HuggingFace (free, local) > Google > OpenAI
-            use_huggingface = os.getenv("USE_HUGGINGFACE_EMBEDDINGS", "").lower() in ("true", "1", "yes")
-            google_api_key = os.getenv("GOOGLE_API_KEY")
-            openai_api_key = os.getenv("OPENAI_API_KEY")
-            
-            if use_huggingface or (not google_api_key and not openai_api_key):
-                print("ℹ️  Using HuggingFace embeddings (local, no API calls)")
-                if HuggingFaceEmbeddings is None:
-                    raise ImportError(
-                        "HuggingFaceEmbeddings not available.\n"
-                        "Install: pip install langchain-huggingface sentence-transformers"
-                    )
-                # Using a good multilingual model suitable for legal text
-                # This will download ~420MB model on first run
-                self.embeddings = HuggingFaceEmbeddings(
-                    model_name="sentence-transformers/all-MiniLM-L6-v2",
-                    model_kwargs={'device': 'cpu'},
-                    encode_kwargs={'normalize_embeddings': True}
-                )
-            elif google_api_key:
-                print("ℹ️  Using Google Gemini embeddings")
-                if GoogleGenerativeAIEmbeddings is None:
-                    raise ImportError(
-                        "GoogleGenerativeAIEmbeddings not available.\n"
-                        "Install: pip install langchain-google-genai"
-                    )
-                self.embeddings = GoogleGenerativeAIEmbeddings(
-                    model="models/embedding-001",
-                    google_api_key=google_api_key
-                )
-            elif openai_api_key:
-                print("ℹ️  Using OpenAI embeddings")
-                self.embeddings = OpenAIEmbeddings(
-                    model=embedding_model,
-                    openai_api_key=openai_api_key
-                )
-            else:
-                raise ValueError(
-                    "No API key found in environment variables.\n"
-                    "Please create a .env file with one of:\n"
-                    "  USE_HUGGINGFACE_EMBEDDINGS=true (free, local)\n"
-                    "  GOOGLE_API_KEY=your_google_api_key\n"
-                    "  OPENAI_API_KEY=your_openai_api_key\n"
-                    "Or set USE_MOCK_EMBEDDINGS=true for development"
-                )
+            raise ValueError(
+                "No API key found in environment variables.\n"
+                "Please create a .env file with:\n"
+                "  USE_HUGGINGFACE_EMBEDDINGS=true (free, local)\n"
+                "  GOOGLE_API_KEY=your_google_api_key\n"
+                "  OPENAI_API_KEY=your_openai_api_key"
+            )
         
         self.vectorstore = None
         self.metadata_store = {}  # Store metadata separately

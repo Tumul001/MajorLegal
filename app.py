@@ -23,11 +23,10 @@ st.set_page_config(
 load_dotenv()
 
 # Import LangChain and LangGraph components (REQUIRED)
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
-from langchain_community.vectorstores import FAISS
 from langgraph.graph import StateGraph, END, START
 from langgraph.checkpoint.memory import MemorySaver
 from typing import TypedDict
