@@ -4,9 +4,9 @@
 
 **Advanced multi-agent AI legal debate system with comprehensive Indian legal database**
 
-- **243,761 document chunks** searchable via semantic embeddings
+- **13,965+ document chunks** searchable via semantic embeddings
 - **Complete Constitution of India** (all 396 articles)
-- **7,247+ real court cases** from Indian Kanoon
+- **15,622 unique Indian legal cases** (HuggingFace InLegalNER + IndianKanoon)
 - **Multi-agent orchestration** using LangGraph (Prosecution, Defense, Moderator)
 - **Semantic search** using HuggingFace embeddings (local, free, no API)
 - **ML-based confidence scoring** for argument quality assessment
@@ -41,8 +41,13 @@ USE_HUGGINGFACE_EMBEDDINGS=true
 
 ### 2. Build FAISS Index (First Time Only)
 ```bash
-# This will take ~2-3 hours for 243,761 chunks
-python build_with_constitution.py
+# Option 1: Use existing merged dataset (recommended)
+python rebuild_vector_store.py
+
+# Option 2: Download fresh datasets and rebuild
+python download_pretrained_datasets.py  # Download HuggingFace datasets
+python merge_datasets.py                 # Merge with existing data
+python rebuild_vector_store.py          # Rebuild FAISS index
 ```
 
 ### 3. Launch the Application
@@ -68,18 +73,24 @@ Major Judicial/
 │   ├── legal_rag.py                   # Production RAG query engine
 │   └── vector_store.py                # FAISS vector database with HuggingFace
 │
-├── data/                              # Data directories (in .gitignore)
-│   ├── raw/                           # Source data (NOT in Git - too large)
+├── data/                              # Data directories
+│   ├── raw/                           # Source data
 │   │   ├── constitution_complete_395_articles.json    # 396 articles
-│   │   └── indiankanoon_massive_cases.json           # 7,247 cases (751 MB)
+│   │   ├── indiankanoon_massive_cases.json           # 7,247 original cases
+│   │   ├── inlegal_train.json                        # 10,995 HuggingFace cases
+│   │   ├── inlegal_test.json                         # 4,501 HuggingFace cases
+│   │   └── merged_final_dataset.json                 # 15,622 unique cases
 │   │
-│   └── vector_store/                  # FAISS index (NOT in Git)
-│       └── faiss_index/               # 243,761 semantic vectors (~500 MB)
+│   ├── processed/                     # Processed data
+│   │   └── processed_cases.json       # 13,965 document chunks
+│   │
+│   └── vector_store/                  # FAISS index
+│       └── faiss_index/               # Semantic embeddings
 │
-├── scrape_indiankanoon.py             # Base scraper for legal cases
-├── scrape_massive.py                  # Bulk scraper with 266 queries
-├── fetch_complete_constitution.py     # Constitution scraper
-└── build_with_constitution.py         # FAISS index builder
+├── download_pretrained_datasets.py    # Download HuggingFace InLegalNER datasets
+├── merge_datasets.py                  # Merge and deduplicate datasets
+├── rebuild_vector_store.py            # Build/rebuild FAISS index
+└── scrape_parallel.py                 # Multi-threaded scraper (8 workers)
 ```
 
 **Note:** Large data files (JSON, FAISS index) are excluded from Git. You must scrape data and build the index locally.
@@ -97,9 +108,13 @@ Major Judicial/
 
 ### 2. **Complete Legal Database**
 - ✅ Constitution of India (396 articles, 22 parts, 12 schedules)
-- ✅ 7,247 real Indian court cases (Supreme Court & High Courts)
+- ✅ 15,622 unique Indian legal cases from:
+  - **10,995 cases** from HuggingFace InLegalNER (training set)
+  - **4,501 cases** from HuggingFace InLegalNER (test set)
+  - **7,247 cases** from IndianKanoon (Supreme Court & High Courts)
+  - Deduplicated to remove overlaps
 - ✅ Major Acts: IPC, CrPC, Evidence Act, CPC, NDPS, POCSO, IT Act, etc.
-- ✅ 243,761 searchable document chunks
+- ✅ 13,965+ searchable document chunks
 
 ### 3. **Semantic Search (RAG)**
 - **HuggingFace Embeddings** (all-MiniLM-L6-v2, 384 dimensions)
@@ -157,16 +172,29 @@ USE_HUGGINGFACE_EMBEDDINGS=true
 ### Constitution
 - **Source:** Official Constitution of India text
 - **File:** `data/raw/constitution_complete_395_articles.json`
-- **Content:** All 396 articles with descriptions (including Article 31A, 31B amendments)
+- **Content:** All 396 articles with descriptions
 - **Size:** ~2 MB
 
 ### Case Law
-- **Source:** Indian Kanoon (indiankanoon.org)
-- **File:** `data/raw/indiankanoon_massive_cases.json`
-- **Content:** 7,247 Supreme Court and High Court cases
-- **Coverage:** Criminal, Constitutional, Civil, Property, Family, Tax, Labor Law
-- **Size:** ~751 MB (excluded from Git)
-- **Date Range:** 1950-2024
+Multiple sources merged and deduplicated:
+
+1. **HuggingFace InLegalNER Dataset**
+   - **Training Set:** 10,995 annotated Indian legal judgments
+   - **Test Set:** 4,501 annotated Indian legal judgments
+   - **Source:** https://huggingface.co/datasets/opennyaiorg/InLegalNER
+   - **Files:** `inlegal_train.json`, `inlegal_test.json`
+
+2. **IndianKanoon Scraped Cases**
+   - **Count:** 7,247 cases (Supreme Court & High Courts)
+   - **Source:** https://indiankanoon.org
+   - **File:** `indiankanoon_massive_cases.json`
+   - **Coverage:** Criminal, Constitutional, Civil, Property, Family, Tax, Labor
+   - **Date Range:** 1950-2024
+
+3. **Merged Dataset**
+   - **Total Unique Cases:** 15,622 (after deduplication)
+   - **File:** `merged_final_dataset.json`
+   - **Duplicates Removed:** 7,121 overlapping cases
 
 ---
 
@@ -175,14 +203,20 @@ USE_HUGGINGFACE_EMBEDDINGS=true
 If you add more data or want to rebuild:
 
 ```bash
-python build_with_constitution.py
+# Rebuild with existing merged dataset
+python rebuild_vector_store.py
+
+# Or download fresh data and rebuild
+python download_pretrained_datasets.py  # Requires HuggingFace authentication
+python merge_datasets.py                 # Merge and deduplicate
+python rebuild_vector_store.py          # Rebuild FAISS index
 ```
 
 **Process:**
-1. Loads Constitution (396 articles)
-2. Loads scraped cases (7,247 cases)
-3. Chunks documents (243,761 chunks @ 500 words each, 50 word overlap)
-4. Generates embeddings (HuggingFace all-MiniLM-L6-v2)
+1. Loads merged dataset (15,622 unique cases)
+2. Converts to processed format with metadata
+3. Chunks documents (13,965 chunks @ 2000 characters each)
+4. Generates embeddings (HuggingFace all-MiniLM-L6-v2, 384 dimensions)
 5. Builds FAISS index
 6. Saves to `data/vector_store/faiss_index/`
 
