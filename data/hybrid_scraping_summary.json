@@ -1,9 +1,0 @@
-{
-  "pretrained_cases": 5000,
-  "scraped_cases": 0,
-  "total_cases": 12247,
-  "unique_cases": 12247,
-  "duplicates_removed": 0,
-  "time_taken": 0.7496974110603333,
-  "timestamp": "2025-11-16T01:57:34.035164"
-}
