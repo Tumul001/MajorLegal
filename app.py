@@ -456,51 +456,29 @@ IMPORTANT: Include ALL retrieved cases in your case_citations array with their e
             return argument
             
         except Exception as e:
-            # Fallback: Create structured argument with RAG citations
-            print(f"⚠️ LangChain parsing failed for {self.role}, using fallback with RAG citations")
+            # Safe fallback: Flag for manual review instead of generating fake citations
+            print(f"⚠️ LangChain parsing failed for {self.role}: {str(e)}")
+            print(f"⚠️ Returning error state - manual review required")
             
-            # Build citations from retrieved documents
-            rag_citations = [
-                CaseCitation(
-                    case_name=doc.metadata.get('case_name', 'Unknown Case'),
-                    citation=doc.metadata.get('citation', 'N/A'),
-                    year=doc.metadata.get('date', '2020')[:4] if doc.metadata.get('date') else '2020',
-                    relevance=f"Supports {self.role} position based on retrieved context",
-                    excerpt=doc.page_content[:200] + "..."
-                )
-                for doc in relevant_docs
-            ]
-            
-            if self.role == "prosecution":
-                return LegalArgument(
-                    main_argument=f"The prosecution argues that the evidence demonstrates culpability under applicable Indian law. The retrieved case law supports prosecution's position on constitutional compliance.",
-                    supporting_points=[
-                        "Evidence collection followed constitutional safeguards",
-                        "Fundamental rights under Article 20 and 21 were protected during investigation",
-                        "Procedural requirements under CrPC were maintained",
-                        "Precedent from Indian Supreme Court supports admissibility"
-                    ],
-                    case_citations=rag_citations,
-                    statutes_cited=["Article 20 (Protection against self-incrimination)", "Article 21 (Right to life and personal liberty)", "CrPC Section 161"],
-                    legal_reasoning="The investigating authority followed due process as mandated by constitutional provisions and Supreme Court guidelines. The accused was informed of grounds of arrest and all procedural safeguards were maintained throughout the investigation.",
-                    weaknesses_acknowledged=["Defense may challenge procedural compliance timing", "Chain of custody may be contested"],
-                    confidence_score=0.75
-                )
-            else:
-                return LegalArgument(
-                    main_argument=f"The defense submits that fundamental constitutional protections were violated, requiring exclusion of evidence under fruit of the poisonous tree doctrine.",
-                    supporting_points=[
-                        "Article 21 rights to fair procedure were compromised",
-                        "Arrest procedures violated constitutional guidelines",
-                        "Evidence obtained through unconstitutional means must be excluded",
-                        "Right to legal counsel was not adequately protected"
-                    ],
-                    case_citations=rag_citations,
-                    statutes_cited=["Article 21 (Life and personal liberty)", "Article 22 (Protection against arrest)", "CrPC Section 41"],
-                    legal_reasoning="Following established Supreme Court precedent on protection of fundamental rights, arbitrary detention without proper grounds violates constitutional guarantees. The fruit of the poisonous tree doctrine requires suppression of improperly obtained evidence.",
-                    weaknesses_acknowledged=["Prosecution may establish exigent circumstances", "Public interest exceptions might apply"],
-                    confidence_score=0.78
-                )
+            # Return error state with NO citations (avoid hallucination)
+            return LegalArgument(
+                main_argument=f"⚠️ [ERROR: Argument generation failed for {self.role} - Manual review required]\n\nSystem encountered an error while processing legal argument. Retrieved {len(relevant_docs)} relevant documents but could not parse structured output from AI model.",
+                supporting_points=[
+                    "Automated argument generation encountered a system error",
+                    f"Error details: {str(e)[:100]}",
+                    "Human legal expert review is required",
+                    f"{len(relevant_docs)} potentially relevant cases were retrieved but not cited"
+                ],
+                case_citations=[],  # EMPTY - Do not generate fake citations
+                statutes_cited=[],  # EMPTY - Cannot reliably extract from error state
+                legal_reasoning=f"Due to system error during argument generation, this {self.role} argument could not be automatically constructed. The retrieved legal documents are available but have not been verified for relevance. A qualified legal professional should manually review the case facts and construct appropriate arguments with proper citations.",
+                weaknesses_acknowledged=[
+                    "Complete manual review required - automated system failed",
+                    "Retrieved documents have not been verified for relevance",
+                    "No confidence in argument quality - human expert needed"
+                ],
+                confidence_score=0.0  # Zero confidence for error states
+            )
 
 class ModeratorLangChainAgent:
     """LangChain-based moderator agent for impartial evaluation"""
@@ -734,50 +712,29 @@ IMPORTANT:
         return argument
         
     except Exception as e:
-        st.warning(f"⚠️ AI generation failed, using fallback argument: {str(e)}")
-        # Fallback to structured mock argument
-        citations = [
-            CaseCitation(
-                case_name=doc.metadata.get('case_name', 'Unknown Case'),
-                citation=doc.metadata.get('citation', 'N/A'),
-                year=doc.metadata.get('date', '2020')[:4] if doc.metadata.get('date') else '2020',
-                relevance=f"Relevant to {role} position",
-                excerpt=doc.page_content[:200] + "..."
-            )
-            for doc in relevant_docs[:2]
-        ]
+        st.warning(f"⚠️ AI generation failed for {role}: {str(e)}")
+        print(f"⚠️ FALLBACK ERROR for {role}: Returning safe error state")
         
-        if role == "prosecution":
-            fallback = LegalArgument(
-                main_argument=f"The prosecution submits that the evidence clearly establishes the defendant's culpability under applicable Indian law.",
-                supporting_points=[
-                    "Evidence collection adhered to constitutional safeguards",
-                    "Fundamental rights under Article 20 and 21 were protected",
-                    "Precedent from Indian Supreme Court supports evidence admissibility"
-                ],
-                case_citations=citations,
-                statutes_cited=["Article 20 (Protection against self-incrimination)", "Article 21 (Right to life and personal liberty)", "CrPC Section 161"],
-                legal_reasoning="The investigating authority followed due process as mandated by D.K. Basu guidelines. The accused was informed of grounds of arrest and all procedural safeguards were maintained.",
-                weaknesses_acknowledged=["Defense may challenge procedural compliance", "Timing of legal counsel access may be contested"],
-                confidence_score=0.75  # Will be recalculated
-            )
-        else:
-            fallback = LegalArgument(
-                main_argument=f"The defense respectfully submits that fundamental constitutional protections were violated, requiring exclusion of evidence.",
-                supporting_points=[
-                    "Article 21 rights to fair procedure were compromised",
-                    "Arrest procedures violated D.K. Basu guidelines",
-                    "Evidence obtained through unconstitutional means must be excluded"
-                ],
-                case_citations=citations,
-                statutes_cited=["Article 21 (Life and personal liberty)", "Article 22 (Protection against arrest)", "CrPC Section 41"],
-                legal_reasoning="Following Joginder Kumar precedent, arbitrary detention without proper grounds violates constitutional guarantees. The fruit of the poisonous tree doctrine requires suppression.",
-                weaknesses_acknowledged=["Prosecution may establish exigent circumstances", "Public interest exceptions might apply"],
-                confidence_score=0.78  # Will be recalculated
-            )
+        # Safe fallback: Return error state instead of generating fake citations
+        fallback = LegalArgument(
+            main_argument=f"⚠️ [ERROR: {role.upper()} argument generation failed - Manual review required]\n\nThe AI system encountered an error while generating the {role} argument. Retrieved {len(relevant_docs)} potentially relevant documents but could not construct a reliable legal argument.",
+            supporting_points=[
+                f"Automated {role} argument generation failed",
+                f"Error: {str(e)[:100]}",
+                "Human legal expert review is required",
+                f"{len(relevant_docs)} cases retrieved but not verified for relevance"
+            ],
+            case_citations=[],  # EMPTY - Do not generate unverified citations
+            statutes_cited=[],  # EMPTY - Cannot reliably extract in error state
+            legal_reasoning=f"System error prevented automated generation of {role} argument. The retrieved legal documents have not been verified for relevance or applicability to this case. A qualified legal professional must manually review the case facts and construct appropriate arguments with proper citations.",
+            weaknesses_acknowledged=[
+                "Complete manual review required - automated system failed",
+                "Retrieved documents not verified for relevance",
+                "No confidence in argument quality - expert needed"
+            ],
+            confidence_score=0.0  # Zero confidence for error states
+        )
         
-        # Recalculate confidence score for fallback too
-        fallback.confidence_score = calculate_confidence_score(fallback, similarity_scores)
         return fallback
 
 def generate_moderator_verdict(

@@ -12,7 +12,10 @@ openai>=1.0.0
 # Vector store
 faiss-cpu>=1.7.4
 numpy>=1.24.0
-
+# Add to requirements.txt
+sentence-transformers>=2.2.0
+langchain-huggingface>=0.1.0
+torch>=2.0.0  # Required by sentence-transformers
 # Data processing
 beautifulsoup4>=4.12.0
 requests>=2.31.0
