@@ -75,7 +75,7 @@ class IndianLegalVectorStore:
             # This will download ~420MB model on first run
             self.embeddings = HuggingFaceEmbeddings(
                 model_name="sentence-transformers/all-MiniLM-L6-v2",
-                model_kwargs={'device': 'cpu'},
+                model_kwargs={'device': 'cpu', 'local_files_only': True},
                 encode_kwargs={'normalize_embeddings': True}
             )
         elif google_api_key:
