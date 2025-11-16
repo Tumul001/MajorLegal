@@ -37,6 +37,27 @@ from rag_system.legal_rag import ProductionLegalRAGSystem
 from citation_verifier import CitationVerifier, CitationVerification
 
 # =======================
+# Heuristic Score Configuration
+# =======================
+# These constants control the argument strength heuristic calculation.
+# NOTE: This is NOT a calibrated probability - it's a composite score
+# designed for relative comparison and UI display only.
+
+# Component weights (must sum to 1.0)
+CITATION_WEIGHT = 0.40      # Weight for citation quality (case citations + statutes)
+SIMILARITY_WEIGHT = 0.30    # Weight for RAG vector similarity scores
+STRUCTURE_WEIGHT = 0.20     # Weight for argument structure (points, reasoning, weaknesses)
+REASONING_WEIGHT = 0.10     # Weight for reasoning depth (objectivity)
+
+# Output range for heuristic score
+HEURISTIC_MIN = 0.0         # Minimum possible heuristic score
+HEURISTIC_MAX = 1.0         # Maximum possible heuristic score
+
+# Display range (for UI purposes, to avoid extreme scores)
+HEURISTIC_DISPLAY_MIN = 0.6  # Minimum displayed score
+HEURISTIC_DISPLAY_MAX = 0.95 # Maximum displayed score
+
+# =======================
 # Custom CSS
 # =======================
 st.markdown("""
@@ -98,7 +119,7 @@ class LegalArgument(BaseModel):
     statutes_cited: List[str] = Field(description="Relevant statutes")
     legal_reasoning: str = Field(description="Detailed legal reasoning")
     weaknesses_acknowledged: List[str] = Field(description="Acknowledged weaknesses in the argument")
-    confidence_score: float = Field(description="Confidence score between 0 and 1")
+    heuristic_score: float = Field(description="Composite heuristic score (0-1) for argument strength - NOT a calibrated probability")
 
 class ModeratorVerdict(BaseModel):
     round_winner: str = Field(description="'prosecution' or 'defense' or 'tie'")
@@ -139,42 +160,53 @@ class DebateState(TypedDict):
 # =======================
 # ML Confidence Analysis
 # =======================
-def calculate_confidence_score(
+def calculate_argument_heuristic_score(
     argument: LegalArgument, 
     similarity_scores: List[float] = None
 ) -> float:
     """
-    Calculate confidence score using multiple factors
+    Calculate a composite heuristic score for argument strength.
     
-    Factors:
-    1. Case citation quality (40%)
-    2. Vector similarity scores (30%)
-    3. Argument structure (20%)
-    4. Legal reasoning depth (10%)
+    IMPORTANT: This is NOT a calibrated probability or statistical confidence measure.
+    It is a hand-tuned heuristic combining multiple factors for relative comparison
+    and UI display purposes only. The weights and ranges are configured at the module
+    level and should not be interpreted as rigorous statistical confidence.
+    
+    Factors (configurable via module constants):
+    1. Case citation quality (CITATION_WEIGHT: {:.0%})
+    2. Vector similarity scores (SIMILARITY_WEIGHT: {:.0%})
+    3. Argument structure (STRUCTURE_WEIGHT: {:.0%})
+    4. Legal reasoning depth (REASONING_WEIGHT: {:.0%})
+    
+    Args:
+        argument: The legal argument to score
+        similarity_scores: Optional RAG vector similarity scores (0-1 range)
     
     Returns:
-        Confidence score between 0.6 and 0.95
-    """
-    # 1. Citation Quality Score (0-1)
+        Heuristic score in range [HEURISTIC_MIN, HEURISTIC_MAX], normalized
+        to [HEURISTIC_DISPLAY_MIN, HEURISTIC_DISPLAY_MAX] for UI display.
+    """.format(CITATION_WEIGHT, SIMILARITY_WEIGHT, STRUCTURE_WEIGHT, REASONING_WEIGHT)
+    
+    # 1. Citation Quality Component (0-1)
     citation_count = len(argument.case_citations)
     statute_count = len(argument.statutes_cited)
     
-    # More citations = higher confidence (max at 5 citations)
+    # More citations = higher score (saturates at 5 citations)
     citation_score = min(citation_count / 5, 1.0) * 0.7
-    # Statute support adds confidence (max at 3 statutes)
+    # Statute support adds to score (saturates at 3 statutes)
     statute_score = min(statute_count / 3, 1.0) * 0.3
     citation_quality = citation_score + statute_score
     
-    # 2. Similarity Score (if available from RAG retrieval)
+    # 2. Similarity Component (if available from RAG retrieval)
     if similarity_scores:
-        # Average of top similarity scores (already 0-1)
+        # Average of top-3 similarity scores (already 0-1 normalized)
         avg_similarity = sum(similarity_scores[:3]) / len(similarity_scores[:3])
         similarity_factor = avg_similarity
     else:
-        # Fallback: estimate based on citations
+        # Fallback: estimate based on citation count
         similarity_factor = 0.75 if citation_count >= 3 else 0.65
     
-    # 3. Argument Structure Score (0-1)
+    # 3. Argument Structure Component (0-1)
     supporting_points_score = min(len(argument.supporting_points) / 4, 1.0) * 0.4
     reasoning_words = len(argument.legal_reasoning.split())
     reasoning_score = min(reasoning_words / 150, 1.0) * 0.4  # Target: 150+ words
@@ -182,28 +214,39 @@ def calculate_confidence_score(
     weakness_score = min(len(argument.weaknesses_acknowledged) / 2, 1.0) * 0.2
     structure_quality = supporting_points_score + reasoning_score + weakness_score
     
-    # 4. Legal Reasoning Depth (0-1)
+    # 4. Legal Reasoning Depth Component (0-1)
+    # Use sentiment analysis as a proxy for objectivity
     blob = TextBlob(argument.main_argument + " " + argument.legal_reasoning)
-    # Lower subjectivity = more objective/factual = higher confidence
+    # Lower subjectivity = more objective/factual language
     objectivity = 1.0 - blob.sentiment.subjectivity
     reasoning_depth = objectivity
     
-    # Weighted combination
-    confidence = (
-        citation_quality * 0.40 +      # 40% weight on citations
-        similarity_factor * 0.30 +     # 30% weight on vector similarity
-        structure_quality * 0.20 +     # 20% weight on structure
-        reasoning_depth * 0.10         # 10% weight on reasoning depth
+    # Weighted combination using configurable weights
+    raw_score = (
+        citation_quality * CITATION_WEIGHT +
+        similarity_factor * SIMILARITY_WEIGHT +
+        structure_quality * STRUCTURE_WEIGHT +
+        reasoning_depth * REASONING_WEIGHT
     )
     
-    # Normalize to 0.6-0.95 range (avoid extremes)
-    normalized_confidence = 0.6 + (confidence * 0.35)
+    # Normalize to display range [HEURISTIC_DISPLAY_MIN, HEURISTIC_DISPLAY_MAX]
+    # This avoids showing extreme scores (0.0 or 1.0) which might be misinterpreted
+    display_range = HEURISTIC_DISPLAY_MAX - HEURISTIC_DISPLAY_MIN
+    normalized_score = HEURISTIC_DISPLAY_MIN + (raw_score * display_range)
     
-    return round(normalized_confidence, 2)
+    # Clip to absolute bounds and round for display
+    final_score = max(HEURISTIC_MIN, min(HEURISTIC_MAX, normalized_score))
+    
+    return round(final_score, 2)
 
-def get_confidence_breakdown(argument: LegalArgument) -> dict:
-    """Calculate confidence breakdown using ML techniques"""
-    # Sentiment analysis
+def get_heuristic_breakdown(argument: LegalArgument) -> dict:
+    """
+    Calculate detailed breakdown of heuristic score components.
+    
+    Returns a dictionary with individual component values used in the
+    heuristic score calculation. This is for transparency and debugging only.
+    """
+    # Sentiment analysis for reasoning depth component
     blob = TextBlob(argument.main_argument + " " + argument.legal_reasoning)
     
     return {
@@ -229,38 +272,40 @@ def display_argument(argument: LegalArgument, role: str, round_num: int):
     st.markdown(f"**Main Argument:**")
     st.write(argument.main_argument)
     
-    # Display confidence score with enhanced breakdown
-    st.markdown(f"**Confidence Score:** {argument.confidence_score:.2f} 🎯")
+    # Display heuristic score with clear labeling
+    st.markdown(f"**Argument Strength Score (heuristic):** {argument.heuristic_score:.2f} 🎯")
+    st.caption("ℹ️ This is a composite heuristic for relative comparison, not a statistical probability")
     
-    # Show detailed confidence breakdown in an expander
-    breakdown = get_confidence_breakdown(argument)
-    with st.expander("📊 Confidence Score Breakdown"):
+    # Show detailed heuristic breakdown in an expander
+    breakdown = get_heuristic_breakdown(argument)
+    with st.expander("📊 Heuristic Score Breakdown"):
         st.markdown("### Calculation Components:")
+        st.caption("⚠️ Hand-tuned weights for UI display - not calibrated probabilities")
         
-        # Citation Quality (40%)
+        # Citation Quality component
         citation_count = len(argument.case_citations)
         statute_count = len(argument.statutes_cited)
         citation_score = min(citation_count / 5, 1.0) * 0.7 + min(statute_count / 3, 1.0) * 0.3
-        st.progress(citation_score, text=f"Citation Quality (40%): {citation_score:.2f}")
+        st.progress(citation_score, text=f"Citation Quality ({CITATION_WEIGHT:.0%}): {citation_score:.2f}")
         st.caption(f"📚 {citation_count} cases + {statute_count} statutes")
         
-        # Argument Structure (20%)
+        # Argument Structure component
         supporting_score = min(len(argument.supporting_points) / 4, 1.0) * 0.4
         reasoning_words = len(argument.legal_reasoning.split())
         reasoning_score = min(reasoning_words / 150, 1.0) * 0.4
         weakness_score = min(len(argument.weaknesses_acknowledged) / 2, 1.0) * 0.2
         structure_score = supporting_score + reasoning_score + weakness_score
-        st.progress(structure_score, text=f"Structure Quality (20%): {structure_score:.2f}")
+        st.progress(structure_score, text=f"Structure Quality ({STRUCTURE_WEIGHT:.0%}): {structure_score:.2f}")
         st.caption(f"📝 {len(argument.supporting_points)} points + {reasoning_words} words reasoning")
         
-        # Objectivity (10%)
+        # Objectivity component
         objectivity = 1.0 - breakdown['sentiment_subjectivity']
-        st.progress(objectivity, text=f"Objectivity (10%): {objectivity:.2f}")
-        st.caption(f"🎯 Sentiment: {breakdown['sentiment_polarity']:.2f}")
+        st.progress(objectivity, text=f"Objectivity ({REASONING_WEIGHT:.0%}): {objectivity:.2f}")
+        st.caption(f"🎯 Sentiment polarity: {breakdown['sentiment_polarity']:.2f}")
         
         st.markdown("---")
-        st.markdown("**Formula:** `0.6 + (weighted_sum × 0.35)`")
-        st.markdown("*Vector similarity (30%) automatically incorporated from RAG retrieval*")
+        st.markdown(f"**Formula:** `{HEURISTIC_DISPLAY_MIN} + (weighted_sum × {HEURISTIC_DISPLAY_MAX - HEURISTIC_DISPLAY_MIN})`")
+        st.markdown(f"*Vector similarity ({SIMILARITY_WEIGHT:.0%}) automatically incorporated from RAG retrieval*")
     
     with st.expander("📋 Supporting Points"):
         for i, point in enumerate(argument.supporting_points, 1):
@@ -513,7 +558,7 @@ IMPORTANT: Include ALL retrieved cases in your case_citations array with their e
                     "Retrieved documents have not been verified for relevance",
                     "No confidence in argument quality - human expert needed"
                 ],
-                confidence_score=0.0  # Zero confidence for error states
+                heuristic_score=0.0  # Zero heuristic score for error states
             )
 
 class ModeratorLangChainAgent:
@@ -559,12 +604,12 @@ Case: {state['case_description']}
 PROSECUTION:
 - Argument: {pros_arg.main_argument}
 - Citations: {len(pros_arg.case_citations)} cases
-- Confidence: {pros_arg.confidence_score}
+- Heuristic Strength Score: {pros_arg.heuristic_score}
 
 DEFENSE:
 - Argument: {def_arg.main_argument}
 - Citations: {len(def_arg.case_citations)} cases
-- Confidence: {def_arg.confidence_score}
+- Heuristic Strength Score: {def_arg.heuristic_score}
 
 Provide your impartial verdict for this round."""
         
@@ -636,7 +681,7 @@ def generate_ai_argument(role: str, case_desc: str, rag_system: ProductionLegalR
         "statutes_cited": ["Statute 1", "Statute 2"],
         "legal_reasoning": "string (3-4 sentences)",
         "weaknesses_acknowledged": ["weakness 1", "weakness 2"],
-        "confidence_score": 0.75
+        "heuristic_score": 0.75
     }
     
     # Build the prompt based on role
@@ -660,7 +705,7 @@ Return ONLY a valid JSON object (no markdown, no code blocks) with this EXACT st
 IMPORTANT: 
 - case_citations must be an array of objects with ALL fields: case_name, citation, year, relevance, excerpt
 - Use the Indian cases provided above
-- confidence_score must be a number between 0.6 and 0.95"""
+- heuristic_score must be a number between 0.6 and 0.95 (composite heuristic, not probability)"""
 
     else:  # defense
         system_prompt = f"""You are an expert defense attorney. Analyze the case and build a strong defense argument.
@@ -682,7 +727,7 @@ Return ONLY a valid JSON object (no markdown, no code blocks) with this EXACT st
 IMPORTANT: 
 - case_citations must be an array of objects with ALL fields: case_name, citation, year, relevance, excerpt
 - Use the Indian cases provided above
-- confidence_score must be a number between 0.6 and 0.95"""
+- heuristic_score must be a number between 0.6 and 0.95 (composite heuristic, not probability)"""
 
     # Generate the argument with JSON output
     prompt = system_prompt
@@ -742,8 +787,8 @@ IMPORTANT:
         argument = LegalArgument(**data)
         
         # Recalculate confidence score using our algorithm
-        calculated_confidence = calculate_confidence_score(argument, similarity_scores)
-        argument.confidence_score = calculated_confidence
+        calculated_score = calculate_argument_heuristic_score(argument, similarity_scores)
+        argument.heuristic_score = calculated_score
         
         return argument
         
@@ -768,7 +813,7 @@ IMPORTANT:
                 "Retrieved documents not verified for relevance",
                 "No confidence in argument quality - expert needed"
             ],
-            confidence_score=0.0  # Zero confidence for error states
+            heuristic_score=0.0  # Zero heuristic score for error states
         )
         
         return fallback
@@ -812,14 +857,14 @@ Main Argument: {prosecution_arg.main_argument}
 Supporting Points: {', '.join(prosecution_arg.supporting_points)}
 Cases Cited: {len(prosecution_arg.case_citations)} cases
 Statutes: {', '.join(prosecution_arg.statutes_cited)}
-Confidence: {prosecution_arg.confidence_score}
+Heuristic Strength Score: {prosecution_arg.heuristic_score}
 
 **DEFENSE ARGUMENT:**
 Main Argument: {defense_arg.main_argument}
 Supporting Points: {', '.join(defense_arg.supporting_points)}
 Cases Cited: {len(defense_arg.case_citations)} cases
 Statutes: {', '.join(defense_arg.statutes_cited)}
-Confidence: {defense_arg.confidence_score}
+Heuristic Strength Score: {defense_arg.heuristic_score}
 
 As an impartial judge, evaluate both sides based on:
 1. Legal reasoning strength
@@ -853,9 +898,9 @@ IMPORTANT:
         return ModeratorVerdict(**data)
         
     except Exception as e:
-        # Fallback verdict
-        pros_score = prosecution_arg.confidence_score * 10
-        def_score = defense_arg.confidence_score * 10
+        # Fallback verdict based on heuristic scores
+        pros_score = prosecution_arg.heuristic_score * 10
+        def_score = defense_arg.heuristic_score * 10
         
         return ModeratorVerdict(
             round_winner="tie" if abs(pros_score - def_score) < 0.5 else ("prosecution" if pros_score > def_score else "defense"),
@@ -1444,12 +1489,12 @@ Legal Question: Should the evidence (stolen jewelry) be admissible in court?"""
                 st.metric("Total Rounds", num_rounds)
             
             with col2:
-                avg_pros_conf = sum(arg.confidence_score for arg in prosecution_arguments) / len(prosecution_arguments)
-                st.metric("Prosecution Avg Confidence", f"{avg_pros_conf:.2f}")
+                avg_pros_score = sum(arg.heuristic_score for arg in prosecution_arguments) / len(prosecution_arguments)
+                st.metric("Prosecution Avg Strength (heuristic)", f"{avg_pros_score:.2f}")
             
             with col3:
-                avg_def_conf = sum(arg.confidence_score for arg in defense_arguments) / len(defense_arguments)
-                st.metric("Defense Avg Confidence", f"{avg_def_conf:.2f}")
+                avg_def_score = sum(arg.heuristic_score for arg in defense_arguments) / len(defense_arguments)
+                st.metric("Defense Avg Strength (heuristic)", f"{avg_def_score:.2f}")
             
             # All citations used
             st.subheader("📚 All Case Citations Used")
