@@ -45,9 +45,3 @@ data/vector_store/
 *_report.json
 test_suite_*.json
 automated_evaluation_report.json
-
-# One-time setup scripts (already executed)
-download_pretrained_datasets.py
-merge_datasets.py
-scrape_parallel.py
-generate_results.py
