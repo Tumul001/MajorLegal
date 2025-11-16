@@ -123,8 +123,8 @@ Major Judicial/
 - FAISS vector database for fast similarity search
 
 ### 4. **AI-Powered Arguments**
-- **Google Gemini 2.0 Flash** for generation
-- Real case law citations with excerpts
+- **Google Gemini 2.5 Flash** for generation
+- Real case law citations with excerpts (enriched with RAG metadata)
 - Constitutional references (Articles, Parts, Schedules)
 - Statutory provisions cited
 - Structured legal reasoning
@@ -349,7 +349,7 @@ normalized = 0.6 + (confidence * 0.35)  # Scale to 0.6-0.95
 | **Embedding Model** | all-MiniLM-L6-v2 |
 | **Chunk Size** | 500 words |
 | **Chunk Overlap** | 50 words |
-| **LLM Model** | Gemini 2.0 Flash |
+| **LLM Model** | Gemini 2.5 Flash |
 
 ---
 
@@ -499,7 +499,7 @@ python -c "from rag_system.legal_rag import ProductionLegalRAGSystem; rag = Prod
 - **Acts & Statutes:** Public government databases
 
 ### AI & ML Stack
-- **LLM:** Google Gemini 2.0 Flash (text generation)
+- **LLM:** Google Gemini 2.5 Flash (text generation)
 - **Embeddings:** HuggingFace Sentence Transformers (all-MiniLM-L6-v2)
 - **Vector Store:** FAISS by Meta AI (similarity search)
 - **Orchestration:** LangChain + LangGraph (multi-agent workflows)
