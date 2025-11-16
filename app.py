@@ -49,6 +49,10 @@ SIMILARITY_WEIGHT = 0.30    # Weight for RAG vector similarity scores
 STRUCTURE_WEIGHT = 0.20     # Weight for argument structure (points, reasoning, weaknesses)
 REASONING_WEIGHT = 0.10     # Weight for reasoning depth (objectivity)
 
+# Validate that weights sum to 1.0 (within floating-point tolerance)
+_WEIGHT_SUM = CITATION_WEIGHT + SIMILARITY_WEIGHT + STRUCTURE_WEIGHT + REASONING_WEIGHT
+assert abs(_WEIGHT_SUM - 1.0) < 1e-6, f"Heuristic weights must sum to 1.0, got {_WEIGHT_SUM}"
+
 # Output range for heuristic score
 HEURISTIC_MIN = 0.0         # Minimum possible heuristic score
 HEURISTIC_MAX = 1.0         # Maximum possible heuristic score
@@ -56,6 +60,18 @@ HEURISTIC_MAX = 1.0         # Maximum possible heuristic score
 # Display range (for UI purposes, to avoid extreme scores)
 HEURISTIC_DISPLAY_MIN = 0.6  # Minimum displayed score
 HEURISTIC_DISPLAY_MAX = 0.95 # Maximum displayed score
+
+def clip_heuristic_score(value: float) -> float:
+    """
+    Safely clip a heuristic score to valid bounds.
+    
+    Args:
+        value: Raw score value (may be out of bounds)
+    
+    Returns:
+        Score clipped to [HEURISTIC_MIN, HEURISTIC_MAX] and rounded to 2 decimals
+    """
+    return round(max(HEURISTIC_MIN, min(HEURISTIC_MAX, float(value))), 2)
 
 # =======================
 # Custom CSS
@@ -167,10 +183,20 @@ def calculate_argument_heuristic_score(
     """
     Calculate a composite heuristic score for argument strength.
     
-    IMPORTANT: This is NOT a calibrated probability or statistical confidence measure.
-    It is a hand-tuned heuristic combining multiple factors for relative comparison
-    and UI display purposes only. The weights and ranges are configured at the module
-    level and should not be interpreted as rigorous statistical confidence.
+    IMPORTANT: This is a DIMENSIONLESS HEURISTIC for relative comparison within
+    this system ONLY. It is NOT:
+    - A calibrated probability
+    - A statistical confidence interval
+    - Comparable across different systems or datasets
+    
+    This hand-tuned heuristic combines multiple factors using fixed weights.
+    The output is normalized to a display range to avoid extreme values that
+    might be misinterpreted as certainty.
+    
+    FUTURE IMPROVEMENT: This could be replaced with a trained model (e.g.,
+    logistic regression with isotonic calibration) if labeled training data
+    becomes available. The current weights were chosen heuristically based on
+    domain knowledge, not optimized on data.
     
     Factors (configurable via module constants):
     1. Case citation quality (CITATION_WEIGHT: {:.0%})
@@ -180,11 +206,12 @@ def calculate_argument_heuristic_score(
     
     Args:
         argument: The legal argument to score
-        similarity_scores: Optional RAG vector similarity scores (0-1 range)
+        similarity_scores: Optional RAG vector similarity scores (0-1 range).
+                          If None or empty, uses citation-based fallback.
     
     Returns:
-        Heuristic score in range [HEURISTIC_MIN, HEURISTIC_MAX], normalized
-        to [HEURISTIC_DISPLAY_MIN, HEURISTIC_DISPLAY_MAX] for UI display.
+        Heuristic strength score in [HEURISTIC_MIN, HEURISTIC_MAX], typically
+        displayed in range [HEURISTIC_DISPLAY_MIN, HEURISTIC_DISPLAY_MAX].
     """.format(CITATION_WEIGHT, SIMILARITY_WEIGHT, STRUCTURE_WEIGHT, REASONING_WEIGHT)
     
     # 1. Citation Quality Component (0-1)
@@ -192,59 +219,72 @@ def calculate_argument_heuristic_score(
     statute_count = len(argument.statutes_cited)
     
     # More citations = higher score (saturates at 5 citations)
-    citation_score = min(citation_count / 5, 1.0) * 0.7
+    citation_score = min(citation_count / 5.0, 1.0) * 0.7
     # Statute support adds to score (saturates at 3 statutes)
-    statute_score = min(statute_count / 3, 1.0) * 0.3
-    citation_quality = citation_score + statute_score
+    statute_score = min(statute_count / 3.0, 1.0) * 0.3
+    citation_quality = min(citation_score + statute_score, 1.0)  # Ensure <= 1.0
     
-    # 2. Similarity Component (if available from RAG retrieval)
-    if similarity_scores:
+    # 2. Similarity Component (robust handling of edge cases)
+    if similarity_scores and len(similarity_scores) > 0:
         # Average of top-3 similarity scores (already 0-1 normalized)
-        avg_similarity = sum(similarity_scores[:3]) / len(similarity_scores[:3])
-        similarity_factor = avg_similarity
+        top_k = min(3, len(similarity_scores))  # Handle lists shorter than 3
+        valid_scores = [max(0.0, min(1.0, s)) for s in similarity_scores[:top_k]]  # Clip to [0,1]
+        similarity_factor = sum(valid_scores) / top_k if top_k > 0 else 0.5
     else:
         # Fallback: estimate based on citation count
         similarity_factor = 0.75 if citation_count >= 3 else 0.65
     
     # 3. Argument Structure Component (0-1)
-    supporting_points_score = min(len(argument.supporting_points) / 4, 1.0) * 0.4
+    supporting_points_score = min(len(argument.supporting_points) / 4.0, 1.0) * 0.4
     reasoning_words = len(argument.legal_reasoning.split())
-    reasoning_score = min(reasoning_words / 150, 1.0) * 0.4  # Target: 150+ words
+    reasoning_score = min(reasoning_words / 150.0, 1.0) * 0.4  # Target: 150+ words
     # Acknowledging weaknesses shows thoroughness
-    weakness_score = min(len(argument.weaknesses_acknowledged) / 2, 1.0) * 0.2
-    structure_quality = supporting_points_score + reasoning_score + weakness_score
+    weakness_score = min(len(argument.weaknesses_acknowledged) / 2.0, 1.0) * 0.2
+    structure_quality = min(supporting_points_score + reasoning_score + weakness_score, 1.0)
     
     # 4. Legal Reasoning Depth Component (0-1)
     # Use sentiment analysis as a proxy for objectivity
-    blob = TextBlob(argument.main_argument + " " + argument.legal_reasoning)
-    # Lower subjectivity = more objective/factual language
-    objectivity = 1.0 - blob.sentiment.subjectivity
-    reasoning_depth = objectivity
+    try:
+        blob = TextBlob(argument.main_argument + " " + argument.legal_reasoning)
+        # Lower subjectivity = more objective/factual language
+        objectivity = max(0.0, min(1.0, 1.0 - blob.sentiment.subjectivity))
+        reasoning_depth = objectivity
+    except Exception:
+        # Fallback if TextBlob fails
+        reasoning_depth = 0.5
     
-    # Weighted combination using configurable weights
+    # Weighted combination using configurable weights (guaranteed to sum to 1.0)
     raw_score = (
         citation_quality * CITATION_WEIGHT +
         similarity_factor * SIMILARITY_WEIGHT +
         structure_quality * STRUCTURE_WEIGHT +
         reasoning_depth * REASONING_WEIGHT
     )
+    # raw_score is now in [0, 1] since all components are in [0, 1] and weights sum to 1.0
     
-    # Normalize to display range [HEURISTIC_DISPLAY_MIN, HEURISTIC_DISPLAY_MAX]
-    # This avoids showing extreme scores (0.0 or 1.0) which might be misinterpreted
+    # Map from [0, 1] to display range [HEURISTIC_DISPLAY_MIN, HEURISTIC_DISPLAY_MAX]
+    # Mathematical relationship:
+    #   display_score = HEURISTIC_DISPLAY_MIN + raw_score * (HEURISTIC_DISPLAY_MAX - HEURISTIC_DISPLAY_MIN)
+    # This linear transformation maps:
+    #   raw_score=0 -> HEURISTIC_DISPLAY_MIN
+    #   raw_score=1 -> HEURISTIC_DISPLAY_MAX
     display_range = HEURISTIC_DISPLAY_MAX - HEURISTIC_DISPLAY_MIN
     normalized_score = HEURISTIC_DISPLAY_MIN + (raw_score * display_range)
     
-    # Clip to absolute bounds and round for display
-    final_score = max(HEURISTIC_MIN, min(HEURISTIC_MAX, normalized_score))
-    
-    return round(final_score, 2)
+    # Final safety clip and round (should be redundant if math is correct, but defensive)
+    return clip_heuristic_score(normalized_score)
 
 def get_heuristic_breakdown(argument: LegalArgument) -> dict:
     """
     Calculate detailed breakdown of heuristic score components.
     
-    Returns a dictionary with individual component values used in the
-    heuristic score calculation. This is for transparency and debugging only.
+    This function is for TRANSPARENCY and DEBUGGING only. The returned values
+    should NOT be used for downstream decision-making or compared across systems.
+    They are purely informational to help users understand how the heuristic
+    score was calculated.
+    
+    Returns:
+        Dictionary with raw component values (citation_count, sentiment metrics, etc.)
     """
     # Sentiment analysis for reasoning depth component
     blob = TextBlob(argument.main_argument + " " + argument.legal_reasoning)
@@ -556,7 +596,7 @@ IMPORTANT: Include ALL retrieved cases in your case_citations array with their e
                 weaknesses_acknowledged=[
                     "Complete manual review required - automated system failed",
                     "Retrieved documents have not been verified for relevance",
-                    "No confidence in argument quality - human expert needed"
+                    "No heuristic strength available - human expert needed"
                 ],
                 heuristic_score=0.0  # Zero heuristic score for error states
             )
@@ -783,10 +823,10 @@ IMPORTANT:
             print(f"⚠️ {role.upper()}: No citations in fallback parse - REQUIRES MANUAL REVIEW")
             # Don't inject fake citations - better to have none than wrong ones
         
-        # Convert to LegalArgument object (AI's confidence score might be unreliable)
+        # Convert to LegalArgument object (AI's heuristic score might be unreliable)
         argument = LegalArgument(**data)
         
-        # Recalculate confidence score using our algorithm
+        # Recalculate heuristic strength score using our algorithm
         calculated_score = calculate_argument_heuristic_score(argument, similarity_scores)
         argument.heuristic_score = calculated_score
         
@@ -811,7 +851,7 @@ IMPORTANT:
             weaknesses_acknowledged=[
                 "Complete manual review required - automated system failed",
                 "Retrieved documents not verified for relevance",
-                "No confidence in argument quality - expert needed"
+                "No heuristic strength available - expert needed"
             ],
             heuristic_score=0.0  # Zero heuristic score for error states
         )
@@ -904,7 +944,7 @@ IMPORTANT:
         
         return ModeratorVerdict(
             round_winner="tie" if abs(pros_score - def_score) < 0.5 else ("prosecution" if pros_score > def_score else "defense"),
-            reasoning=f"Round {round_num} analysis based on confidence scores and argument quality.",
+            reasoning=f"Round {round_num} analysis based on heuristic strength scores and argument quality.",
             prosecution_strengths=["Strong legal citations", "Clear reasoning"],
             defense_strengths=["Constitutional focus", "Procedural arguments"],
             prosecution_weaknesses=["Some points could be stronger"],
@@ -1531,7 +1571,7 @@ Legal Question: Should the evidence (stolen jewelry) be admissible in court?"""
                 - ⚠️ **Uncertain:** {summary['uncertain']}
                 - ❌ **Unverified:** {summary['unverified']}
                 - 🚨 **Hallucinated:** {summary['hallucinated']}
-                - **Avg Confidence:** {summary['avg_confidence']:.0%}
+                - **Avg Verification Confidence:** {summary['avg_confidence']:.0%}
                 - **Status:** {'🟢 SAFE' if summary['status'] == 'SAFE' else '🔴 RISKY'}
                 """)
                 
