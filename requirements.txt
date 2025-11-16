@@ -22,3 +22,4 @@ tqdm>=4.65.0
 # NLP
 nltk>=3.8.0
 scikit-learn>=1.3.0
+networkx>=3.1

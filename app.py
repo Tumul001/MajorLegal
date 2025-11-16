@@ -32,8 +32,11 @@ from langgraph.checkpoint.memory import MemorySaver
 from typing import TypedDict
 from pydantic import BaseModel, Field
 from datetime import datetime
+from pathlib import Path
 
 from rag_system.legal_rag import ProductionLegalRAGSystem
+from rag_system.argument_graph import build_argument_graph, save_graph_json
+from rag_system.provenance import link_claims_provenance
 
 # =======================
 # Custom CSS
@@ -98,6 +101,7 @@ class LegalArgument(BaseModel):
     legal_reasoning: str = Field(description="Detailed legal reasoning")
     weaknesses_acknowledged: List[str] = Field(description="Acknowledged weaknesses in the argument")
     confidence_score: float = Field(description="Confidence score between 0 and 1")
+    provenance: List[Dict] = Field(default_factory=list, description="Evidence provenance for claims")
 
 class ModeratorVerdict(BaseModel):
     round_winner: str = Field(description="'prosecution' or 'defense' or 'tie'")
@@ -1389,6 +1393,57 @@ Legal Question: Should the evidence (stolen jewelry) be admissible in court?"""
             defense_arguments = final_state["defense_arguments"]
             moderator_verdicts = final_state["moderator_verdicts"]
             final_judgment = final_state["final_judgment"]
+
+            # Build explainable argument graph and save it for this run
+            try:
+                graph_data = build_argument_graph(prosecution_arguments, defense_arguments)
+                graphs_dir = Path("data/graphs")
+                timestamp_graph = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"argument_graph_{timestamp_graph}.json"
+                saved_path = save_graph_json(graph_data, str(graphs_dir), filename)
+                st.success(f"🔗 Argument graph saved: {saved_path}")
+
+                with st.expander("🧭 Argument Graph Overview"):
+                    nodes = graph_data.get('nodes', [])
+                    links = graph_data.get('links', [])
+                    st.write(f"Nodes: {len(nodes)} — Edges: {len(links)}")
+                    mains = [n for n in nodes if n.get('type') == 'main']
+                    for n in mains[:6]:
+                        st.markdown(f"- **{n.get('role','')} Round {n.get('round','')}**: {n.get('text','')[:200]}")
+            except Exception as e:
+                st.warning(f"Could not build argument graph: {e}")
+
+            # Attach provenance to each argument (link claims -> retrieved docs)
+            try:
+                for arg in prosecution_arguments + defense_arguments:
+                    try:
+                        link_claims_provenance(arg, rag.vector_store, top_k=3)
+                    except Exception:
+                        # continue best-effort
+                        pass
+            except Exception as e:
+                st.warning(f"Provenance linking failed: {e}")
+
+            # Save debate run log for evaluation
+            try:
+                runs_dir = Path("data/debate_runs")
+                runs_dir.mkdir(parents=True, exist_ok=True)
+                run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                run_file = runs_dir / f"debate_run_{run_ts}.json"
+                # Prepare serializable data
+                run_data = {
+                    'case_description': case_description,
+                    'timestamp': datetime.now().isoformat(),
+                    'prosecution_arguments': [a.dict() if hasattr(a, 'dict') else {} for a in prosecution_arguments],
+                    'defense_arguments': [a.dict() if hasattr(a, 'dict') else {} for a in defense_arguments],
+                    'moderator_verdicts': [v.dict() if hasattr(v, 'dict') else {} for v in moderator_verdicts],
+                    'final_judgment': final_judgment.dict() if hasattr(final_judgment, 'dict') else {}
+                }
+                with open(run_file, 'w', encoding='utf-8') as f:
+                    json.dump(run_data, f, ensure_ascii=False, indent=2)
+                st.success(f"💾 Debate run saved: {run_file}")
+            except Exception as e:
+                st.warning(f"Could not save debate run: {e}")
             
             # Save to history
             history_entry = {
