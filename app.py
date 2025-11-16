@@ -416,7 +416,7 @@ def display_argument(argument: LegalArgument, role: str, round_num: int):
 class LegalDebateAgent:
     """LangChain-based legal debate agent with RAG and memory"""
     
-    def __init__(self, role: str, rag_system: ProductionLegalRAGSystem, model_name: str = "gemini-2.0-flash-exp"):
+    def __init__(self, role: str, rag_system: ProductionLegalRAGSystem, model_name: str = "gemini-2.5-flash"):
         self.role = role
         self.rag_system = rag_system
         
@@ -604,7 +604,7 @@ IMPORTANT: Include ALL retrieved cases in your case_citations array with their e
 class ModeratorLangChainAgent:
     """LangChain-based moderator agent for impartial evaluation"""
     
-    def __init__(self, model_name: str = "gemini-2.0-flash-exp"):
+    def __init__(self, model_name: str = "gemini-2.5-flash"):
         self.llm = ChatGoogleGenerativeAI(
             model=model_name,
             temperature=0.2,
@@ -687,7 +687,7 @@ def generate_ai_argument(role: str, case_desc: str, rag_system: ProductionLegalR
     
     # Configure and initialize Google Gemini
     genai.configure(api_key=google_api_key)
-    model = genai.GenerativeModel('gemini-2.0-flash-exp')
+    model = genai.GenerativeModel('gemini-2.5-flash')
     
     # Search for relevant cases using RAG with similarity scores
     search_query = f"{role} argument for: {case_desc[:200]}"
@@ -826,6 +826,33 @@ IMPORTANT:
         # Convert to LegalArgument object (AI's heuristic score might be unreliable)
         argument = LegalArgument(**data)
         
+        # Enrich citations with actual RAG document metadata
+        enriched_citations = []
+        for citation in argument.case_citations:
+            # Try to match citation with RAG docs to get real metadata
+            best_match = None
+            for doc in relevant_docs:
+                doc_case_name = doc.metadata.get('case_name', '')
+                # Match by case name similarity or if citation references the doc ID
+                if (doc_case_name and citation.case_name and 
+                    doc_case_name.lower() in citation.case_name.lower() or
+                    citation.case_name.lower() in doc_case_name.lower() or
+                    doc.metadata.get('doc_id', '') in citation.case_name or
+                    doc.metadata.get('case_id', '') in citation.case_name):
+                    best_match = doc
+                    break
+            
+            # Enrich with real metadata if found
+            if best_match:
+                citation.case_name = best_match.metadata.get('case_name', citation.case_name)
+                citation.citation = best_match.metadata.get('citation', citation.citation)
+                citation.year = best_match.metadata.get('year', citation.year)
+                # Keep the AI-generated relevance and excerpt as they explain the usage
+            
+            enriched_citations.append(citation)
+        
+        argument.case_citations = enriched_citations
+        
         # Recalculate heuristic strength score using our algorithm
         calculated_score = calculate_argument_heuristic_score(argument, similarity_scores)
         argument.heuristic_score = calculated_score
@@ -873,7 +900,7 @@ def generate_moderator_verdict(
     
     import google.generativeai as genai
     genai.configure(api_key=google_api_key)
-    model = genai.GenerativeModel('gemini-2.0-flash-exp')
+    model = genai.GenerativeModel('gemini-2.5-flash')
     
     # Build the moderator prompt
     json_example = {
@@ -969,7 +996,7 @@ def generate_final_judgment(
     
     import google.generativeai as genai
     genai.configure(api_key=google_api_key)
-    model = genai.GenerativeModel('gemini-2.0-flash-exp')
+    model = genai.GenerativeModel('gemini-2.5-flash')
     
     # Calculate total scores
     total_pros_score = sum(v.score_prosecution for v in all_verdicts)
@@ -1171,7 +1198,7 @@ def create_debate_workflow(rag_system: ProductionLegalRAGSystem, max_rounds: int
             total_def = sum(v.score_defense for v in state["moderator_verdicts"])
             
             # Use moderator agent for final judgment
-            llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-exp", temperature=0.2)
+            llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
             
             prompt = f"""Based on {len(state['moderator_verdicts'])} rounds of debate:
 
@@ -1577,14 +1604,25 @@ Legal Question: Should the evidence (stolen jewelry) be admissible in court?"""
                 
                 # Display each citation with verification
                 for citation, verification in verification_results:
+                    # Format citation display, hide "N/A" values
+                    citation_str = citation['citation'] if citation['citation'] and citation['citation'] != 'N/A' else ''
+                    year_str = citation['year'] if citation['year'] and citation['year'] != 'N/A' else ''
+                    
+                    # Build display string
+                    case_display = f"**{citation['case_name']}**"
+                    if year_str:
+                        case_display += f" ({year_str})"
+                    if citation_str:
+                        case_display += f" - {citation_str}"
+                    
                     if verification.flag == "VERIFIED":
-                        st.success(f"✅ **{citation['case_name']}** ({citation['year']}) - {citation['citation']} | Confidence: {verification.confidence:.0%}")
+                        st.success(f"✅ {case_display} | Confidence: {verification.confidence:.0%}")
                     elif verification.flag == "UNCERTAIN":
-                        st.warning(f"⚠️ **{citation['case_name']}** ({citation['year']}) - {citation['citation']} | Confidence: {verification.confidence:.0%}")
+                        st.warning(f"⚠️ {case_display} | Confidence: {verification.confidence:.0%}")
                     elif verification.flag == "HALLUCINATED":
-                        st.error(f"🚨 **{citation['case_name']}** - HALLUCINATED (placeholder or empty)")
+                        st.error(f"🚨 {case_display} - HALLUCINATED (placeholder or empty)")
                     else:
-                        st.error(f"❌ **{citation['case_name']}** ({citation['year']}) - {citation['citation']} | UNVERIFIED")
+                        st.error(f"❌ {case_display} | UNVERIFIED")
             else:
                 # Fallback without verification
                 for citation in all_citations:
