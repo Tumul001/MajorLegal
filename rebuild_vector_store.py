@@ -3,8 +3,9 @@ Rebuild FAISS vector store with merged dataset
 """
 import sys
 import json
+import hashlib
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Set
 
 # Add rag_system to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -19,9 +20,11 @@ def convert_raw_to_processed(raw_data_file: str, output_file: str):
         raw_cases = json.load(f)
     
     print(f"✅ Loaded {len(raw_cases):,} cases")
-    print("🔄 Converting to processed format...")
+    print("🔄 Converting to processed format with deduplication...")
     
     processed_docs = []
+    seen_hashes: Set[str] = set()  # Track chunk hashes for deduplication
+    duplicate_count = 0
     
     for case in raw_cases:
         # Extract text content - handle different data structures
@@ -52,6 +55,21 @@ def convert_raw_to_processed(raw_data_file: str, output_file: str):
         chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
         
         for idx, chunk in enumerate(chunks):
+            # Skip very short chunks
+            if len(chunk.strip()) < 100:
+                continue
+            
+            # DEDUPLICATION: Hash the normalized chunk text
+            normalized_chunk = ' '.join(chunk.lower().split())  # Normalize whitespace + lowercase
+            chunk_hash = hashlib.sha256(normalized_chunk.encode('utf-8')).hexdigest()
+            
+            # Skip if we've seen this exact chunk before
+            if chunk_hash in seen_hashes:
+                duplicate_count += 1
+                continue
+            
+            seen_hashes.add(chunk_hash)
+            
             # Extract case name from source_info if available
             case_name = 'Unknown'
             if 'data' in case and isinstance(case, dict):
@@ -77,7 +95,8 @@ def convert_raw_to_processed(raw_data_file: str, output_file: str):
             }
             processed_docs.append(processed_doc)
     
-    print(f"✅ Created {len(processed_docs):,} document chunks")
+    print(f"✅ Created {len(processed_docs):,} unique document chunks")
+    print(f"🗑️  Removed {duplicate_count:,} duplicate chunks ({duplicate_count/(len(processed_docs)+duplicate_count)*100:.1f}% deduplication)")
     
     # Ensure output directory exists
     output_path = Path(output_file)
