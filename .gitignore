@@ -1,5 +1,5 @@
 ﻿# Python
-__pycache__/
+__pycache__
 *.py[cod]
 *.class
 *.so
@@ -7,7 +7,7 @@ __pycache__/
 env/
 venv/
 ENV/
-build/
+build
 dist/
 *.egg-info/
 
@@ -24,9 +24,13 @@ dist/
 Thumbs.db
 
 # Data files - EXCLUDE ALL JSON AND INDEX FILES
-data/raw/
-data/processed/
-data/vector_store/
+data/
+*.json
+*.faiss
+*.index
+*.pkl
+bench_result.txt
+debug_output.txt
 
 # Keep directory structure only
 !data/raw/.gitkeep
@@ -37,7 +41,6 @@ data/vector_store/
 *.log
 
 # Large files
-*.pkl
 *.h5
 *.zip
 

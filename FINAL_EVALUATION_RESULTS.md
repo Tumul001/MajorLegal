@@ -288,3 +288,9 @@ report = calculate_metrics(all_results)
 **Results File:** `real_evaluation_report.json`  
 **Repository:** https://github.com/Tumul001/MajorLegal  
 **Contact:** Tumul Nigam (Tumul001)
+
+## Latest Updates (2025-11-28)
+- **Comprehensive Benchmark Suite**: Implemented a full benchmark suite with 100 diverse Indian legal scenarios.
+- **Baselines**: Added comparisons for Vanilla LLM (Gemini 2.0 Flash), Simple RAG, and MajorLegal.
+- **Robust Logging**: Benchmark results are now timestamped and saved to ench_result.txt.
+- **Refactoring**: enchmark.py now supports batch processing, CLI arguments, and robust error handling.

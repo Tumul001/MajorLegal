@@ -1,21 +1,26 @@
+# Core framework
 streamlit>=1.28.0
-langchain>=0.1.0
-langchain-openai>=0.1.0
-langchain-community>=0.0.10
-langchain-google-genai>=2.0.0
-langgraph>=0.0.20
 pydantic>=2.0.0
 python-dotenv>=1.0.0
-textblob>=0.17.1
+
+# LangChain ecosystem - let langchain manage langchain-core version
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-openai>=0.2.0
+langchain-google-genai>=2.0.0
+langgraph>=0.2.0
+
+# Embeddings
+langchain-voyageai>=0.1.0
+sentence-transformers>=2.2.0  # For citation verification only (small model)
+
+# OpenAI
 openai>=1.0.0
 
 # Vector store
 faiss-cpu>=1.7.4
 numpy>=1.24.0
-# Add to requirements.txt
-sentence-transformers>=2.2.0
-langchain-huggingface>=0.1.0
-torch>=2.0.0  # Required by sentence-transformers
+
 # Data processing
 beautifulsoup4>=4.12.0
 requests>=2.31.0
@@ -23,5 +28,11 @@ pandas>=2.0.0
 tqdm>=4.65.0
 
 # NLP
+textblob>=0.17.1
 nltk>=3.8.0
 scikit-learn>=1.3.0
+
+# Datasets
+datasets>=2.14.0
+networkx>=3.0
+ragas>=0.1.0

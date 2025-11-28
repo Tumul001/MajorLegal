@@ -1,147 +1,100 @@
-"""
-Rebuild FAISS vector store with merged dataset
-"""
-import sys
+import argparse
 import json
-import hashlib
+import os
+import time
 from pathlib import Path
-from typing import List, Dict, Set
+from typing import List, Dict
+import numpy as np
+from tqdm import tqdm
+from langchain_voyageai import VoyageAIEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
+from dotenv import load_dotenv
 
-# Add rag_system to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Load environment variables
+load_dotenv()
 
-from rag_system.vector_store import IndianLegalVectorStore
-
-def convert_raw_to_processed(raw_data_file: str, output_file: str):
-    """Convert raw merged dataset to processed format expected by vector store"""
+def rebuild_vector_store(data_path: str, output_dir: str = "data/vector_store", batch_size: int = 100):
+    """
+    Rebuild FAISS vector store using Voyage AI Embeddings (API-based)
+    """
+    start_time = time.time()
+    print(f"🚀 Starting vector store rebuild with Voyage AI...")
+    print(f"📂 Data source: {data_path}")
     
-    print("📄 Loading raw dataset...")
-    with open(raw_data_file, 'r', encoding='utf-8') as f:
-        raw_cases = json.load(f)
+    # Check API Key
+    api_key = os.getenv("VOYAGE_API_KEY")
+    if not api_key:
+        raise ValueError("❌ VOYAGE_API_KEY not found in .env file")
     
-    print(f"✅ Loaded {len(raw_cases):,} cases")
-    print("🔄 Converting to processed format with deduplication...")
-    
-    processed_docs = []
-    seen_hashes: Set[str] = set()  # Track chunk hashes for deduplication
-    duplicate_count = 0
-    
-    for case in raw_cases:
-        # Extract text content - handle different data structures
-        text = None
+    # Load data
+    if not os.path.exists(data_path):
+        raise FileNotFoundError(f"Data file not found: {data_path}")
         
-        # InLegalNER format: nested 'data' -> 'text'
-        if isinstance(case, dict) and 'data' in case:
-            text = case['data'].get('text', '')
-            # Extract metadata from InLegalNER
-            meta = case.get('meta', {})
-            source_info = meta.get('source', '')
-        # IndianKanoon format
-        elif isinstance(case, dict):
-            text = (case.get('judgment_text') or 
-                    case.get('text') or 
-                    case.get('content') or 
-                    case.get('judgement', ''))
-            source_info = case.get('url', '')
+    print("📚 Loading processed documents...")
+    with open(data_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    
+    print(f"✅ Loaded {len(data)} documents")
+    
+    # Prepare texts and metadatas
+    texts = [doc['text'] for doc in data]
+    metadatas = [doc['metadata'] for doc in data]
+    
+    model_name = "voyage-law-2"
+    print(f"🧠 Using embedding model: {model_name}")
+    print(f"⚡ Mode: Cloud API (Voyage AI)")
+    
+    # Initialize Voyage Embeddings
+    embeddings_model = VoyageAIEmbeddings(
+        voyage_api_key=api_key,
+        model=model_name,
+        batch_size=batch_size
+    )
+    
+    # Create FAISS index
+    # Note: FAISS.from_texts automatically handles batching for embeddings
+    print("🔨 Building FAISS index (this sends data to Voyage AI)...")
+    
+    # We'll do it in chunks to show progress and handle potential network issues gracefully
+    vector_store = None
+    chunk_size = 1000  # Process 1000 docs at a time
+    
+    total_chunks = (len(texts) + chunk_size - 1) // chunk_size
+    
+    for i in tqdm(range(0, len(texts), chunk_size), total=total_chunks, desc="Indexing Batches"):
+        batch_texts = texts[i:i + chunk_size]
+        batch_metadatas = metadatas[i:i + chunk_size]
+        
+        if vector_store is None:
+            vector_store = FAISS.from_texts(
+                texts=batch_texts,
+                embedding=embeddings_model,
+                metadatas=batch_metadatas
+            )
         else:
-            text = str(case)
-            source_info = ''
-        
-        if not text or len(text) < 100:
-            continue
-        
-        # Split long texts into chunks
-        chunk_size = 2000
-        chunks = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
-        
-        for idx, chunk in enumerate(chunks):
-            # Skip very short chunks
-            if len(chunk.strip()) < 100:
-                continue
+            vector_store.add_texts(
+                texts=batch_texts,
+                metadatas=batch_metadatas
+            )
             
-            # DEDUPLICATION: Hash the normalized chunk text
-            normalized_chunk = ' '.join(chunk.lower().split())  # Normalize whitespace + lowercase
-            chunk_hash = hashlib.sha256(normalized_chunk.encode('utf-8')).hexdigest()
-            
-            # Skip if we've seen this exact chunk before
-            if chunk_hash in seen_hashes:
-                duplicate_count += 1
-                continue
-            
-            seen_hashes.add(chunk_hash)
-            
-            # Extract case name from source_info if available
-            case_name = 'Unknown'
-            if 'data' in case and isinstance(case, dict):
-                # For InLegalNER, try to extract from text or source
-                case_name = source_info.split('/')[-2] if '/' in source_info else 'Indian Legal Case'
-            else:
-                case_name = case.get('title', case.get('case_name', 'Unknown'))
-            
-            processed_doc = {
-                'text': chunk,
-                'metadata': {
-                    'case_name': case_name,
-                    'citation': case.get('citation', case.get('cite', 'N/A')),
-                    'court': case.get('court', 'Indian Court'),
-                    'date': case.get('date', case.get('year', 'Unknown')),
-                    'judges': case.get('judges', []),
-                    'acts_mentioned': case.get('acts', []),
-                    'sections': case.get('sections', []),
-                    'url': source_info if source_info else case.get('url', ''),
-                    'chunk_index': idx,
-                    'source': 'Indian Legal Dataset'
-                }
-            }
-            processed_docs.append(processed_doc)
+        # Optional: Sleep briefly to be nice to the API rate limit if needed
+        # time.sleep(0.1)
     
-    print(f"✅ Created {len(processed_docs):,} unique document chunks")
-    print(f"🗑️  Removed {duplicate_count:,} duplicate chunks ({duplicate_count/(len(processed_docs)+duplicate_count)*100:.1f}% deduplication)")
+    # Save vector store
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    vector_store.save_local(str(output_path / "faiss_index"))
     
-    # Ensure output directory exists
-    output_path = Path(output_file)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    print(f"💾 Saving to {output_file}...")
-    with open(output_file, 'w', encoding='utf-8') as f:
-        json.dump(processed_docs, f, ensure_ascii=False, indent=2)
-    
-    print("✅ Conversion complete!")
-    return len(processed_docs)
-
-def main():
-    print("\n" + "="*70)
-    print("🔨 REBUILDING VECTOR STORE")
-    print("="*70 + "\n")
-    
-    # Path to merged dataset
-    raw_file = Path("data/raw/merged_final_dataset.json")
-    processed_file = Path("data/processed/processed_cases.json")
-    
-    if not raw_file.exists():
-        print(f"❌ Error: {raw_file} not found")
-        print("Run: python merge_datasets.py first")
-        return
-    
-    # Step 1: Convert raw to processed format
-    print("STEP 1: Converting raw data to processed format\n")
-    num_chunks = convert_raw_to_processed(str(raw_file), str(processed_file))
-    
-    # Step 2: Build vector store
-    print("\n" + "-"*70)
-    print("STEP 2: Building FAISS index")
-    print("-"*70 + "\n")
-    
-    vector_store = IndianLegalVectorStore()
-    vector_store.build_from_processed_docs(str(processed_file), batch_size=32)
-    
-    print("\n" + "="*70)
-    print("✅ VECTOR STORE REBUILT SUCCESSFULLY")
-    print("="*70)
-    print(f"\nIndexed {num_chunks:,} document chunks from 15,622 cases")
-    print("\nYou can now run the app:")
-    print("  streamlit run app.py")
-    print("="*70 + "\n")
+    elapsed_time = time.time() - start_time
+    print(f"✅ Vector store saved to {output_path / 'faiss_index'}")
+    print(f"⏱️  Total time: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Rebuild FAISS vector store with Voyage AI")
+    parser.add_argument("--data-path", type=str, default="data/processed/processed_cases.json", help="Path to processed JSON data")
+    parser.add_argument("--batch-size", type=int, default=100, help="Batch size for API calls")
+    
+    args = parser.parse_args()
+    
+    rebuild_vector_store(args.data_path, batch_size=args.batch_size)

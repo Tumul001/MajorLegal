@@ -19,17 +19,17 @@ from langchain_community.vectorstores import FAISS
 # Load environment variables from .env file
 load_dotenv()
 
+# Import Voyage AI embeddings
+try:
+    from langchain_voyageai import VoyageAIEmbeddings
+except ImportError:
+    VoyageAIEmbeddings = None
+
 # Import Google Generative AI embeddings
 try:
     from langchain_google_genai import GoogleGenerativeAIEmbeddings
 except ImportError:
     GoogleGenerativeAIEmbeddings = None
-
-# Import HuggingFace embeddings
-try:
-    from langchain_huggingface import HuggingFaceEmbeddings
-except ImportError:
-    HuggingFaceEmbeddings = None
 
 # Import Document from the correct module for newer LangChain versions
 try:
@@ -59,24 +59,21 @@ class IndianLegalVectorStore:
         Args:
             embedding_model: Embedding model name (OpenAI or Google)
         """
-        # Priority: HuggingFace (free, local) > Google > OpenAI
-        use_huggingface = os.getenv("USE_HUGGINGFACE_EMBEDDINGS", "").lower() in ("true", "1", "yes")
+        # Priority: Voyage AI > Google > OpenAI
+        voyage_api_key = os.getenv("VOYAGE_API_KEY")
         google_api_key = os.getenv("GOOGLE_API_KEY")
         openai_api_key = os.getenv("OPENAI_API_KEY")
         
-        if use_huggingface or (not google_api_key and not openai_api_key):
-            print("ℹ️  Using HuggingFace embeddings (local, no API calls)")
-            if HuggingFaceEmbeddings is None:
+        if voyage_api_key:
+            print("ℹ️  Using Voyage AI embeddings (voyage-law-2)")
+            if VoyageAIEmbeddings is None:
                 raise ImportError(
-                    "HuggingFaceEmbeddings not available.\n"
-                    "Install: pip install langchain-huggingface sentence-transformers"
+                    "VoyageAIEmbeddings not available.\n"
+                    "Install: pip install langchain-voyageai"
                 )
-            # Using a good multilingual model suitable for legal text
-            # This will download ~420MB model on first run
-            self.embeddings = HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2",
-                model_kwargs={'device': 'cpu', 'local_files_only': True},
-                encode_kwargs={'normalize_embeddings': True}
+            self.embeddings = VoyageAIEmbeddings(
+                voyage_api_key=voyage_api_key,
+                model="voyage-law-2"
             )
         elif google_api_key:
             print("ℹ️  Using Google Gemini embeddings")
@@ -99,7 +96,7 @@ class IndianLegalVectorStore:
             raise ValueError(
                 "No API key found in environment variables.\n"
                 "Please create a .env file with:\n"
-                "  USE_HUGGINGFACE_EMBEDDINGS=true (free, local)\n"
+                "  VOYAGE_API_KEY=your_voyage_key (Recommended)\n"
                 "  GOOGLE_API_KEY=your_google_api_key\n"
                 "  OPENAI_API_KEY=your_openai_api_key"
             )
@@ -274,8 +271,8 @@ if __name__ == "__main__":
     query = "What are the requirements for a valid arrest under CrPC?"
     results = vector_store.similarity_search(query, k=3)
     
-    print("\n🔍 Search Results:")
+    print("\\n🔍 Search Results:")
     for i, doc in enumerate(results, 1):
-        print(f"\n{i}. {doc.metadata['case_name']}")
+        print(f"\\n{i}. {doc.metadata['case_name']}")
         print(f"   Citation: {doc.metadata['citation']}")
         print(f"   Content: {doc.page_content[:200]}...")
